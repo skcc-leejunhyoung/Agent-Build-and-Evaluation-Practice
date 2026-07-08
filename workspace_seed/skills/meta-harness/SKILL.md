@@ -29,7 +29,7 @@ python skills/meta-harness/metaharness.py <subcommand> [옵션]
 > cwd 가 workspace 가 아니어도 `--home` 없이 레포를 자동 탐지한다. 스크립트가 레포
 > 루트를 위로 올라가며 찾는다. 홈 경로는 `doctor` 출력에서 확인할 수 있다.
 
-서브커맨드: `doctor · init · run · fork · set-prompt · diff · compare · show · list · promote · clean`
+서브커맨드: `doctor · init · run · fork · edit · set-prompt · diff · compare · show · list · promote · clean`
 
 ## 절차
 
@@ -77,21 +77,45 @@ python skills/meta-harness/metaharness.py show --variant baseline --what answer
 | 특정 도구의 동작/스키마/에러 | `connectors.py`, 또는 `langchain-deepagents.py` 의 `_web_search_tools`/`_mcp_tools` |
 | 반복 절차의 품질 | `workspace_seed/skills/<name>/SKILL.md` (+ 스크립트) |
 
-변경은 **최소·타깃 지향**으로. 한 번에 한두 가지만 바꿔야 무엇이 효과였는지 안다.
-
-### 3) variant 만들고 수정
+### 3) variant 만들고 **최소 변경**으로 수정
 
 ```
 python skills/meta-harness/metaharness.py fork --from baseline --name v1
 ```
 
-출력의 `path` 가 v1 의 소스 루트다(레포 밖). **workspace 밖이므로 셸로만 수정**한다
-(`edit_file` 같은 파일 도구는 workspace 안만 됨). 방법:
+**핵심 원칙 — 원본은 그대로 두고, 바꿀 부분만 국소 수정한다.** variant 는 원본과
+글자 하나까지 동일한 복사본이다. 개선은 "원본을 통째로 다시 쓰는 것"이 아니라
+"원본에서 문제가 되는 부분만 정확히 고치는 것"이다. 그래야 (1) 무엇이 효과였는지
+분리되고 (2) 원본의 좋은 지침을 실수로 날리지 않는다. 한 번에 한두 곳만 바꿔라.
 
-- **시스템 프롬프트**: 새 프롬프트를 파일로 쓴 뒤
-  `python skills/meta-harness/metaharness.py set-prompt --variant v1 --file /tmp/newprompt.txt`
-- **도구/스킬 코드**: `cat > "<v1_path>/connectors.py" <<'EOF' … EOF` 로 전체를 다시 쓰거나,
-  `python - <<'PY'` 스니펫으로 부분 치환한다. 큰 파일은 통째로 재작성이 안전하다.
+수정은 `edit` 서브커맨드로 한다(원본 텍스트 조각을 정확히 find→replace, 유일 매칭 강제):
+
+```
+# 예: SYSTEM_PROMPT 에 규칙 한 줄을 삽입하되 원본은 보존 — 앵커 텍스트 뒤에 끼워넣기
+python skills/meta-harness/metaharness.py edit --variant v1 \
+  --file langchain-deepagents.py \
+  --find "## Core Behavior" \
+  --replace "## Output Persistence
+
+- 핵심 결과는 workspace/answer.txt 에도 저장하라.
+
+## Core Behavior"
+
+# 예: 특정 규칙 문장 하나만 교체
+python skills/meta-harness/metaharness.py edit --variant v1 --file connectors.py \
+  --find "max_results=5" --replace "max_results=8"
+```
+
+- `--find` 는 원본과 **정확히**(공백·들여쓰기 포함) 일치해야 하고, 파일에서 **유일**해야
+  한다(여러 번 나오면 거부 → 더 긴 조각으로 좁혀라). 멀티라인은 `--find-file`/`--replace-file`.
+- `--replace` 를 생략/빈값이면 해당 부분 **삭제**. 즉 add/modify/remove 모두 국소로 된다.
+- 수정 뒤 반드시 diff 로 **변경이 최소한인지** 확인한다:
+  `python skills/meta-harness/metaharness.py diff --a baseline --b v1`
+  → 의도한 몇 줄만 바뀌어야 한다. 원본이 통째로 사라졌으면 잘못한 것이다.
+
+> `set-prompt`(프롬프트 블록 전체 교체)는 프롬프트를 **의도적으로 전면 재작성**할 때만
+> 써라. 원본보다 크게 짧아지면 경고가 뜬다(원본 지침을 날린 신호). 대부분의 개선은
+> `edit` 로 충분하다.
 
 수정 후 실제 무엇이 바뀌었는지 확인:
 

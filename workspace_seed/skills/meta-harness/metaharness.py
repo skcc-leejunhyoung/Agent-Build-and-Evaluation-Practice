@@ -451,11 +451,16 @@ def cmd_fork(args: argparse.Namespace) -> int:
         "new_variant": args.name,
         "path": str(dst),
         "editable_knobs": {
-            "system_prompt": f"{dst}/{HARNESS_ENTRY} 의 SYSTEM_PROMPT (또는 set-prompt 서브커맨드)",
-            "tools": f"{dst}/connectors.py, {dst}/{HARNESS_ENTRY} 의 _web_search_tools/_mcp_tools",
-            "skills": f"{dst}/workspace_seed/skills/<name>/SKILL.md",
+            "system_prompt": f"{HARNESS_ENTRY} 의 SYSTEM_PROMPT",
+            "tools": f"connectors.py, {HARNESS_ENTRY} 의 _web_search_tools/_mcp_tools",
+            "skills": "workspace_seed/skills/<name>/SKILL.md",
         },
-        "hint": "이 경로들을 셸(cat>/sed/python)로 수정한 뒤 run 하세요. workspace 안이 아니므로 리로드에 영향 없음.",
+        "hint": (
+            "variant 는 원본과 동일한 복사본입니다. 개선은 '바꿀 부분만' 최소로 하세요: "
+            f"`edit --variant {args.name} --file <경로> --find <원본조각> --replace <새조각>`. "
+            f"원본을 통째로 날리지 마세요. 수정 후 `diff --a {args.src} --b {args.name}` 로 "
+            "변경이 최소한인지 확인하고 run 하세요."
+        ),
     }, ensure_ascii=False, indent=2))
     return 0
 
@@ -478,12 +483,83 @@ def cmd_set_prompt(args: argparse.Namespace) -> int:
     end = text.find("\"\"\"", body_start)
     if end == -1:
         die("SYSTEM_PROMPT 종료 삼중따옴표를 찾지 못했습니다.")
+    old_body = text[body_start:end]
     # 새 프롬프트 안의 삼중따옴표는 이스케이프.
     safe = new_prompt.replace("\"\"\"", "\\\"\\\"\\\"")
     new_text = text[:body_start] + safe + text[end:]
     entry.write_text(new_text, encoding="utf-8")
-    print(json.dumps({"variant": args.variant, "updated": "SYSTEM_PROMPT",
-                      "new_chars": len(new_prompt)}, ensure_ascii=False))
+    result = {"variant": args.variant, "updated": "SYSTEM_PROMPT",
+              "old_chars": len(old_body), "new_chars": len(new_prompt)}
+    # set-prompt 는 프롬프트를 '통째로' 교체한다. 새 프롬프트가 원본보다 크게 짧으면
+    # 원본의 좋은 지침을 의도치 않게 날렸을 가능성이 높다 → 경고(강제 아님).
+    # 원본을 유지한 채 국소 수정을 원하면 `edit`(find/replace)를 쓰는 게 맞다.
+    if old_body and len(new_prompt) < 0.6 * len(old_body):
+        result["warning"] = (
+            f"새 프롬프트가 원본({len(old_body)}자)보다 크게 짧습니다({len(new_prompt)}자). "
+            "원본 지침을 통째로 날린 게 아닌지 확인하세요. 최소 변경만 원하면 `edit` 서브커맨드로 "
+            "특정 부분만 find/replace 하세요."
+        )
+        print(f"[set-prompt] 경고: {result['warning']}", file=sys.stderr)
+    print(json.dumps(result, ensure_ascii=False))
+    return 0
+
+
+def _resolve_variant_file(vp: Path, rel: str) -> Path:
+    """variant 내부 경로만 허용(밖으로 탈출 방지)."""
+    target = (vp / rel).resolve()
+    if not str(target).startswith(str(vp.resolve())):
+        die(f"variant 밖 경로는 수정할 수 없습니다: {rel}")
+    if not target.is_file():
+        die(f"파일이 없습니다: {rel} (variant '{vp.name}')")
+    return target
+
+
+def cmd_edit(args: argparse.Namespace) -> int:
+    """variant 파일의 특정 부분만 정확히 find→replace 한다(최소 변경 실험용).
+
+    variant 는 원본과 동일한 복사본이므로, 이 명령으로 '바꿀 부분만' 국소 수정하면
+    원본 나머지는 그대로 보존된다. find 가 유일하게 매칭돼야 안전하다(--count 로 조정).
+    find/replace 는 인라인(--find/--replace) 또는 파일(--find-file/--replace-file)로 준다.
+    replace 를 비우면(생략 또는 빈 문자열) 해당 부분을 삭제한다.
+    """
+    repo = find_repo_root()
+    home = home_dir(repo, args.home)
+    vp = variant_path(home, args.variant)
+    if not vp.exists():
+        die(f"variant '{args.variant}' 가 없습니다.")
+    target = _resolve_variant_file(vp, args.file)
+
+    if args.find_file:
+        find = Path(args.find_file).read_text(encoding="utf-8")
+    elif args.find is not None:
+        find = args.find
+    else:
+        die("--find 또는 --find-file 이 필요합니다.")
+    if args.replace_file:
+        replace = Path(args.replace_file).read_text(encoding="utf-8")
+    elif args.replace is not None:
+        replace = args.replace
+    else:
+        replace = ""  # 생략 시 삭제
+
+    if not find:
+        die("find 문자열이 비어 있습니다.")
+    text = target.read_text(encoding="utf-8")
+    n = text.count(find)
+    if n == 0:
+        die("find 문자열을 찾지 못했습니다. 원본 텍스트와 정확히(공백·들여쓰기 포함) 일치해야 합니다.")
+    if n != args.count:
+        die(f"find 가 {n}회 나타났습니다(기대 {args.count}회). 더 구체적으로 지정하거나 "
+            f"--count {n} 로 맞추세요.")
+    new_text = text.replace(find, replace)
+    target.write_text(new_text, encoding="utf-8")
+    print(json.dumps({
+        "variant": args.variant,
+        "file": args.file,
+        "occurrences_replaced": n,
+        "delta_chars": len(new_text) - len(text),
+        "hint": f"diff --a baseline --b {args.variant} 로 변경이 최소한인지 확인하세요.",
+    }, ensure_ascii=False))
     return 0
 
 
@@ -793,7 +869,18 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--live", action="store_true", help="메시징 커넥터까지 살림(위험).")
     sp.set_defaults(func=cmd_fork)
 
-    sp = sub.add_parser("set-prompt", help="variant 의 SYSTEM_PROMPT 블록 교체.")
+    sp = sub.add_parser("edit", help="variant 파일의 특정 부분만 find→replace(최소 변경 실험).")
+    sp.add_argument("--variant", required=True)
+    sp.add_argument("--file", required=True, help="variant 내 상대경로(예: langchain-deepagents.py).")
+    sp.add_argument("--find", help="찾을 텍스트(인라인).")
+    sp.add_argument("--find-file", help="찾을 텍스트 파일(멀티라인).")
+    sp.add_argument("--replace", help="바꿀 텍스트(인라인). 생략/빈값이면 삭제.")
+    sp.add_argument("--replace-file", help="바꿀 텍스트 파일(멀티라인).")
+    sp.add_argument("--count", type=int, default=1, help="기대 매칭 횟수(기본 1, 유일 매칭 강제).")
+    sp.set_defaults(func=cmd_edit)
+
+    sp = sub.add_parser("set-prompt",
+                        help="variant 의 SYSTEM_PROMPT 블록을 통째로 교체(전면 재작성 시에만).")
     sp.add_argument("--variant", required=True)
     sp.add_argument("--file", help="새 프롬프트 파일(없으면 stdin).")
     sp.set_defaults(func=cmd_set_prompt)
