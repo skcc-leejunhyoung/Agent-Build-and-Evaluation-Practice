@@ -157,11 +157,36 @@ def _web_search_tools() -> list:
         return []
     try:
         from langchain_tavily import TavilySearch
+        from langchain_core.tools import StructuredTool
     except ImportError:
         print("[connector] langchain-tavily 미설치 — 웹 검색 건너뜀")
         return []
+
+    base = TavilySearch(max_results=5)
+
+    def _sanitize(kwargs: dict) -> dict:
+        # Tavily 는 finance 토픽 + fast/ultra-fast search_depth 조합을 400 으로 거부한다.
+        # LLM 이 이 조합을 고르면 search_depth 를 advanced 로 낮춰 유효한 호출로 보정한다.
+        if kwargs.get("topic") == "finance" and kwargs.get("search_depth") in ("fast", "ultra-fast"):
+            kwargs = {**kwargs, "search_depth": "advanced"}
+        return kwargs
+
+    def _search(**kwargs):
+        return base.invoke(_sanitize(kwargs))
+
+    async def _asearch(**kwargs):
+        return await base.ainvoke(_sanitize(kwargs))
+
     print("[connector] Tavily 웹 검색 활성화")
-    return [TavilySearch(max_results=5)]
+    return [
+        StructuredTool.from_function(
+            func=_search,
+            coroutine=_asearch,
+            name=base.name,
+            description=base.description,
+            args_schema=base.args_schema,
+        )
+    ]
 
 
 def _mcp_tools() -> list:
