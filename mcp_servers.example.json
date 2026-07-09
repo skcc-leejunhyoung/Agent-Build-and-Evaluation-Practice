@@ -1,21 +1,37 @@
 {
   "_설명": "이 파일은 형식 예시입니다. 실제로 쓰려면 mcp_servers.json 에 아래 형태로 서버를 채우세요. (이 example 파일은 로드되지 않습니다.)",
 
-  "filesystem": {
-    "command": "npx",
-    "args": ["-y", "@modelcontextprotocol/server-filesystem", "."],
+  "time": {
+    "command": "uvx",
+    "args": ["mcp-server-time", "--local-timezone", "Asia/Seoul"],
     "transport": "stdio"
   },
 
+  "pykrx": {
+    "command": "uvx",
+    "args": ["pykrx-mcp"],
+    "transport": "stdio"
+  },
+
+  "browser_설명": "터미널에서 npx playwright install chrome 명령을 실행해야 정상동작합니다",
+  "browser": {
+    "command": "npx",
+    "args": ["-y", "@playwright/mcp@latest", "--headless", "--isolated"],
+    "transport": "stdio"
+  },
+
+  "notion_설명": "NOTION_TOKEN 환경변수에 Notion API 토큰을 설정해야 합니다",
   "notion": {
     "command": "npx",
     "args": ["-y", "@notionhq/notion-mcp-server"],
-    "env": { "NOTION_API_KEY": "여기에-키" },
+    "env": { "NOTION_TOKEN": "ntn_****" },
     "transport": "stdio"
   },
 
+  "github_설명": "GITHUB_TOKEN 환경변수에 GitHub Personal Access Token을 설정해야 합니다",
   "github": {
     "url": "https://api.githubcopilot.com/mcp/",
-    "transport": "streamable_http"
+    "transport": "streamable_http",
+    "headers": { "Authorization": "Bearer <여기에-PAT>" }
   }
 }
