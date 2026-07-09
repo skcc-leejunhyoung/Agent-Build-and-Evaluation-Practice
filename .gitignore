@@ -6,3 +6,4 @@ __pycache__/
 .langgraph_api/
 workspace/
 mcp_servers.json
+.playwright-mcp
